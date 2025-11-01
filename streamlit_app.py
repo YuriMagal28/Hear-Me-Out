@@ -219,7 +219,7 @@ with st.sidebar:
     st.metric("Total de Personagens", len(st.session_state.memes_collection))
 
     if mode == "🎬 Apresentação (Host)":
-        pwd = st.text_input("🔒 Senha do Host", type="password", placeholder="2810")
+        pwd = st.text_input("🔒 Senha do Host", type="password", placeholder="0000")
         if st.button("🔑 Entrar como Host", use_container_width=True):
             if pwd == "2810":
                 st.session_state.presenter_unlocked = True
