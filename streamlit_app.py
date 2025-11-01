@@ -8,6 +8,7 @@ import os
 import json
 import uuid
 import re
+import time
 
 # ==================== CONFIGURATION ====================
 st.set_page_config(
@@ -16,11 +17,10 @@ st.set_page_config(
     layout="wide"
 )
 
-# SerpAPI key hardcoded (como no seu código original; ideal: st.secrets)
+# SerpAPI key (mantida como no seu exemplo)
 SERPAPI_KEY = "021124766e0086f0bbe720bff0d01d3b1977f5b447240c8a1c82728e2e3b0482"
 
 # ==================== PERSISTÊNCIA EM DISCO ====================
-
 DATA_DIR = "party_data"
 IMG_DIR = os.path.join(DATA_DIR, "images")
 META_DIR = os.path.join(DATA_DIR, "entries")
@@ -74,17 +74,14 @@ def load_entries_from_disk():
         try:
             with open(path, "r", encoding="utf-8") as f:
                 meta = json.load(f)
-            # garante que a imagem existe
             if meta.get("image_path") and os.path.exists(meta["image_path"]):
                 entries.append(meta)
         except Exception:
             continue
-    # ordena por criação (asc)
     entries.sort(key=lambda m: m.get("created_at", ""))
     return entries
 
 def clear_all_disk_data():
-    # Remove arquivos e reseta estado
     for folder in (IMG_DIR, META_DIR):
         if os.path.isdir(folder):
             for name in os.listdir(folder):
@@ -94,7 +91,6 @@ def clear_all_disk_data():
                     pass
 
 # ==================== IMAGE SEARCH WITH SERPAPI ====================
-
 def search_google_images(query, api_key):
     try:
         url = "https://serpapi.com/search"
@@ -114,8 +110,7 @@ def search_google_images(query, api_key):
                 if image_url:
                     try:
                         img_response = requests.get(
-                            image_url,
-                            timeout=10,
+                            image_url, timeout=10,
                             headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
                         )
                         if img_response.status_code == 200:
@@ -149,17 +144,17 @@ def create_placeholder_image(text, width=1200, height=675):
             font_large = ImageFont.load_default()
             font_small = ImageFont.load_default()
     bbox = draw.textbbox((0, 0), text, font=font_large)
-    text_width = bbox[2] - bbox[0]
-    text_height = bbox[3] - bbox[1]
-    x = (width - text_width) // 2
-    y = (height - text_height) // 2 - 30
+    tw = bbox[2] - bbox[0]
+    th = bbox[3] - bbox[1]
+    x = (width - tw) // 2
+    y = (height - th) // 2 - 30
     draw.text((x + 4, y + 4), text, font=font_large, fill=(0, 0, 0, 180))
     draw.text((x, y), text, font=font_large, fill=(255, 255, 255))
     subtitle = "Imagem não encontrada"
     bbox2 = draw.textbbox((0, 0), subtitle, font=font_small)
-    sub_width = bbox2[2] - bbox2[0]
-    sub_x = (width - sub_width) // 2
-    sub_y = y + text_height + 20
+    sub_w = bbox2[2] - bbox2[0]
+    sub_x = (width - sub_w) // 2
+    sub_y = y + th + 20
     draw.text((sub_x + 2, sub_y + 2), subtitle, font=font_small, fill=(0, 0, 0, 180))
     draw.text((sub_x, sub_y), subtitle, font=font_small, fill=(255, 255, 255, 200))
     return img
@@ -170,7 +165,7 @@ def fetch_character_image(character_name, api_key):
         return create_placeholder_image(character_name), "Placeholder"
     with st.spinner(f"🔍 Buscando '{character_name}' no Google Images..."):
         img, source = search_google_images(character_name, api_key)
-        if img: 
+        if img:
             st.success(f"✅ Imagem encontrada! (Fonte: {source})")
             return img, source
     with st.spinner("🔍 Tentando busca alternativa..."):
@@ -182,7 +177,6 @@ def fetch_character_image(character_name, api_key):
     return create_placeholder_image(character_name), "Placeholder"
 
 # ==================== MEME CREATION ====================
-
 def create_meme(image, text="HEAR ME OUT", character_name="", canvas_size=(1200, 675)):
     canvas = Image.new("RGB", canvas_size, color=(26, 26, 26))
     img_width, img_height = image.size
@@ -215,6 +209,7 @@ def create_meme(image, text="HEAR ME OUT", character_name="", canvas_size=(1200,
         except:
             main_font = ImageFont.load_default()
             char_font = ImageFont.load_default()
+    # título
     bbox = draw.textbbox((0, 0), text, font=main_font)
     text_width = bbox[2] - bbox[0]
     text_x = (canvas_width - text_width) // 2
@@ -225,6 +220,7 @@ def create_meme(image, text="HEAR ME OUT", character_name="", canvas_size=(1200,
             if ox or oy:
                 draw.text((text_x + ox, text_y + oy), text, font=main_font, fill=(0, 0, 0))
     draw.text((text_x, text_y), text, font=main_font, fill=(255, 255, 255))
+    # personagem
     if character_name:
         char_bbox = draw.textbbox((0, 0), character_name, font=char_font)
         char_width = char_bbox[2] - char_bbox[0]
@@ -237,12 +233,41 @@ def create_meme(image, text="HEAR ME OUT", character_name="", canvas_size=(1200,
         draw.text((char_x, char_y), character_name, font=char_font, fill=(255, 75, 75))
     return canvas
 
-# ==================== SESSION STATE (CARREGADO A PARTIR DO DISCO) ====================
+# ============== TRANSIÇÕES (FADE) PARA A APRESENTAÇÃO ==============
+def make_same_size(img_a: Image.Image, img_b: Image.Image):
+    # normaliza tamanhos para blend
+    w = max(img_a.width, img_b.width)
+    h = max(img_a.height, img_b.height)
+    def pad(img):
+        bg = Image.new("RGB", (w, h), (26, 26, 26))
+        x = (w - img.width) // 2
+        y = (h - img.height) // 2
+        bg.paste(img, (x, y))
+        return bg
+    return pad(img_a), pad(img_b)
+
+def transition_fade(placeholder, img_from: Image.Image, img_to: Image.Image, duration_sec: float = 0.8, steps: int = 10):
+    if img_from is None:
+        placeholder.image(img_to, use_container_width=True)
+        return
+    a, b = make_same_size(img_from, img_to)
+    per_step = max(duration_sec / steps, 0.02)
+    for i in range(steps + 1):
+        alpha = i / float(steps)
+        frame = Image.blend(a, b, alpha)
+        placeholder.image(frame, use_container_width=True)
+        time.sleep(per_step)
+
+# ==================== SESSION STATE ====================
 ensure_storage()
 if "memes_collection" not in st.session_state:
     st.session_state.memes_collection = load_entries_from_disk()
 if "current_slide" not in st.session_state:
     st.session_state.current_slide = 0
+if "presenter_unlocked" not in st.session_state:
+    st.session_state.presenter_unlocked = False
+if "autoplay" not in st.session_state:
+    st.session_state.autoplay = False
 
 # ==================== SIDEBAR ====================
 with st.sidebar:
@@ -254,13 +279,26 @@ with st.sidebar:
     )
     st.divider()
     st.metric("Total de Personagens", len(st.session_state.memes_collection))
-    if mode == "🎬 Apresentação (Host)" and len(st.session_state.memes_collection) > 0:
-        st.divider()
-        if st.button("🗑️ Limpar Todos", type="secondary", use_container_width=True):
-            clear_all_disk_data()
-            st.session_state.memes_collection = []
-            st.session_state.current_slide = 0
-            st.rerun()
+
+    # GATE DE SENHA PARA APRESENTAÇÃO
+    if mode == "🎬 Apresentação (Host)":
+        pwd = st.text_input("🔒 Senha do Host", type="password", placeholder="Digite a senha")
+        if st.button("🔑 Entrar como Host", use_container_width=True):
+            if pwd == "2810":
+                st.session_state.presenter_unlocked = True
+                st.success("Acesso liberado! ✅")
+            else:
+                st.session_state.presenter_unlocked = False
+                st.error("Senha incorreta. ❌")
+
+        if st.session_state.presenter_unlocked and len(st.session_state.memes_collection) > 0:
+            st.divider()
+            if st.button("🗑️ Limpar Todos", type="secondary", use_container_width=True):
+                clear_all_disk_data()
+                st.session_state.memes_collection = []
+                st.session_state.current_slide = 0
+                st.experimental_rerun()
+
     st.divider()
     if SERPAPI_KEY:
         st.success("✅ **SerpAPI Configurado**")
@@ -310,7 +348,6 @@ if mode == "👥 Coleta (Convidados)":
             img, source = fetch_character_image(character_name, SERPAPI_KEY)
             meme = create_meme(img, text="HEAR ME OUT", character_name=character_name)
 
-            # >>> NOVO: salva em disco e recarrega a lista <<<
             saved_meta = save_entry_to_disk(
                 character=character_name,
                 guest=guest_name.strip() if guest_name else "Anônimo",
@@ -334,92 +371,121 @@ if mode == "👥 Coleta (Convidados)":
                 st.caption(f"🕐 {meme_data['timestamp']}")
 
 else:
-    st.title("🎬 Apresentação: HEAR ME OUT da Galera!")
-    # sempre recarrega do disco ao entrar no modo apresentação
+    # ==================== PRESENTATION MODE ====================
     st.session_state.memes_collection = load_entries_from_disk()
+    st.title("🎬 Apresentação: HEAR ME OUT da Galera!")
+
+    if not st.session_state.presenter_unlocked:
+        st.warning("🔒 Acesso restrito. Informe a senha do host na barra lateral para entrar.")
+        st.stop()
 
     if len(st.session_state.memes_collection) == 0:
         st.warning("⚠️ Nenhum personagem foi adicionado ainda!")
         st.info("👈 Volte para o modo **Coleta** e adicione alguns personagens primeiro!")
-    else:
-        col1, col2, col3, col4, col5 = st.columns([1, 1, 2, 1, 1])
-        with col1:
-            if st.button("⏮️ Primeiro", use_container_width=True):
-                st.session_state.current_slide = 0
-                st.rerun()
-        with col2:
+        st.stop()
+
+    # -------- Controles de apresentação / slideshow --------
+    controls_col1, controls_col2, controls_col3, controls_col4 = st.columns([1.3, 1.3, 1.2, 2.2])
+    with controls_col1:
+        trans = st.selectbox("Transição", ["Sem transição", "Fade"], index=1)
+    with controls_col2:
+        sec = st.slider("Duração por slide (s)", 1.0, 10.0, 3.0, 0.5)
+    with controls_col3:
+        if not st.session_state.autoplay:
+            if st.button("▶️ Iniciar Slideshow", use_container_width=True):
+                st.session_state.autoplay = True
+                st.experimental_rerun()
+        else:
+            if st.button("⏹️ Parar", use_container_width=True):
+                st.session_state.autoplay = False
+                st.experimental_rerun()
+    with controls_col4:
+        nav1, nav2, nav3 = st.columns(3)
+        with nav1:
             if st.button("◀️ Anterior", use_container_width=True):
-                if st.session_state.current_slide > 0:
-                    st.session_state.current_slide -= 1
-                    st.rerun()
-        with col3:
+                st.session_state.current_slide = (st.session_state.current_slide - 1) % len(st.session_state.memes_collection)
+                st.experimental_rerun()
+        with nav2:
             st.markdown(
-                f"<h3 style='text-align: center;'>Slide {st.session_state.current_slide + 1} de {len(st.session_state.memes_collection)}</h3>",
+                f"<h3 style='text-align:center;margin-top:0.2rem;'>Slide {st.session_state.current_slide + 1} / {len(st.session_state.memes_collection)}</h3>",
                 unsafe_allow_html=True
             )
-        with col4:
-            if st.button("▶️ Próximo", use_container_width=True):
-                if st.session_state.current_slide < len(st.session_state.memes_collection) - 1:
-                    st.session_state.current_slide += 1
-                    st.rerun()
-        with col5:
-            if st.button("⏭️ Último", use_container_width=True):
-                st.session_state.current_slide = len(st.session_state.memes_collection) - 1
-                st.rerun()
+        with nav3:
+            if st.button("Próximo ▶️", use_container_width=True):
+                st.session_state.current_slide = (st.session_state.current_slide + 1) % len(st.session_state.memes_collection)
+                st.experimental_rerun()
 
-        st.divider()
+    st.divider()
 
-        current_meme = st.session_state.memes_collection[st.session_state.current_slide]
-        st.markdown(
-            f"<h1 style='text-align: center; color: #FF4B4B; font-size: 3.5em;'>🎭 {current_meme['character']}</h1>",
-            unsafe_allow_html=True
-        )
-        st.markdown(
-            f"<h2 style='text-align: center; color: #666;'>Escolhido por: <span style='color: #FF4B4B;'>{current_meme['guest']}</span></h2>",
-            unsafe_allow_html=True
-        )
-        st.markdown(
-            f"<p style='text-align: center; color: #999;'>⏰ {current_meme['timestamp']}</p>",
-            unsafe_allow_html=True
-        )
+    # -------- Área de apresentação (com transição) --------
+    current = st.session_state.memes_collection[st.session_state.current_slide]
 
-        # >>> AGORA CARREGA PELO CAMINHO DO ARQUIVO <<<
-        meme_img = Image.open(current_meme['image_path'])
-        st.image(meme_img, use_container_width=True)
+    # Cabeçalho (nome e autor)
+    st.markdown(
+        f"<h1 style='text-align:center;color:#FF4B4B;font-size:3.2em;margin:0;'>🎭 {current['character']}</h1>",
+        unsafe_allow_html=True
+    )
+    who = current.get("guest") or "Anônimo"
+    st.markdown(
+        f"<h3 style='text-align:center;color:#888;margin-top:0.2rem;'>Enviado por: <span style='color:#FF4B4B;'>{who}</span></h3>",
+        unsafe_allow_html=True
+    )
+    st.markdown(
+        f"<p style='text-align:center;color:#999;margin-top:-0.3rem;'>⏰ {current['timestamp']}</p>",
+        unsafe_allow_html=True
+    )
 
-        col_dl1, col_dl2, col_dl3 = st.columns([1, 2, 1])
-        with col_dl2:
-            meme_bytes = BytesIO()
-            meme_img.save(meme_bytes, format='PNG')
-            st.download_button(
-                label="⬇️ Baixar este Meme",
-                data=meme_bytes.getvalue(),
-                file_name=f"hear_me_out_{slugify(current_meme['character'])}.png",
-                mime="image/png",
+    # Placeholder para a imagem com transição
+    show_area = st.empty()
+
+    # Carrega imagens atual e anterior para transição
+    try:
+        img_current = Image.open(current['image_path'])
+    except Exception:
+        img_current = create_placeholder_image(current['character'])
+
+    prev_idx = (st.session_state.current_slide - 1) % len(st.session_state.memes_collection)
+    img_prev = None
+    if len(st.session_state.memes_collection) > 1:
+        try:
+            img_prev = Image.open(st.session_state.memes_collection[prev_idx]['image_path'])
+        except Exception:
+            img_prev = None
+
+    # Exibe com transição selecionada
+    if trans == "Fade":
+        transition_fade(show_area, img_prev, img_current, duration_sec=0.7, steps=10)
+    else:
+        show_area.image(img_current, use_container_width=True)
+
+    # -------- Slideshow automático (loop controlado) --------
+    if st.session_state.autoplay:
+        # Aguarda o tempo por slide, avança e rerun
+        time.sleep(sec)
+        st.session_state.current_slide = (st.session_state.current_slide + 1) % len(st.session_state.memes_collection)
+        st.experimental_rerun()
+
+    st.divider()
+
+    # -------- Galeria / seletor rápido --------
+    st.subheader("📸 Galeria Completa")
+    cols = st.columns(5)
+    for idx, meme_data in enumerate(st.session_state.memes_collection):
+        with cols[idx % 5]:
+            try:
+                mini_img = Image.open(meme_data['image_path'])
+                st.image(mini_img, use_container_width=True)
+            except Exception:
+                st.caption("Imagem indisponível")
+            if st.button(
+                f"{meme_data['character'][:15]}",
+                key=f"thumb_{idx}",
                 use_container_width=True,
-                type="primary"
-            )
-
-        st.divider()
-        st.subheader("📸 Galeria Completa")
-
-        cols = st.columns(5)
-        for idx, meme_data in enumerate(st.session_state.memes_collection):
-            with cols[idx % 5]:
-                try:
-                    mini_img = Image.open(meme_data['image_path'])
-                    st.image(mini_img, use_container_width=True)
-                except Exception:
-                    st.caption("Imagem indisponível")
-                if st.button(
-                    f"{meme_data['character'][:15]}",
-                    key=f"thumb_{idx}",
-                    use_container_width=True,
-                    type="secondary" if idx != st.session_state.current_slide else "primary"
-                ):
-                    st.session_state.current_slide = idx
-                    st.rerun()
-                st.caption(f"👤 {meme_data['guest']}")
+                type="secondary" if idx != st.session_state.current_slide else "primary"
+            ):
+                st.session_state.current_slide = idx
+                st.experimental_rerun()
+            st.caption(f"👤 {meme_data.get('guest','Anônimo')}")
 
 st.divider()
 st.caption("Made with ❤️ for your party | Powered by SerpAPI + Google Images")
