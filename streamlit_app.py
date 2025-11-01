@@ -3,40 +3,19 @@ import requests
 from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
 from datetime import datetime
-import os, json, uuid, re, time
-import streamlit.components.v1 as components
+import os, json, uuid, re
 
-# ==================== CONFIGURAÇÃO ====================
+# ==================== CONFIG ====================
 st.set_page_config(page_title="HEAR ME OUT - Modo Festa 🎉", page_icon="🗣️", layout="wide")
 
-# --- compat de rerun entre versões do Streamlit ---
+# compat rerun (streamlit muda entre st.rerun e st.experimental_rerun)
 def do_rerun():
     try:
         st.rerun()
     except AttributeError:
         st.experimental_rerun()
 
-# --- helpers de query params (para teclas) ---
-def _get_qparams():
-    try:
-        return dict(st.query_params)
-    except Exception:
-        return {k: v[0] if isinstance(v, list) else v for k, v in st.experimental_get_query_params().items()}
-
-def _set_qparams(d: dict):
-    # substitui por d (limpa + define)
-    try:
-        st.query_params.clear()
-        for k, v in d.items():
-            if v is not None:
-                st.query_params[k] = v
-    except Exception:
-        st.experimental_set_query_params(**{k: v for k, v in d.items() if v is not None})
-
-def _clear_qparams():
-    _set_qparams({})
-
-# SerpAPI key (mantenha como quiser; ideal: st.secrets["SERPAPI_KEY"])
+# SerpAPI (igual ao seu exemplo; ideal em st.secrets)
 SERPAPI_KEY = "021124766e0086f0bbe720bff0d01d3b1977f5b447240c8a1c82728e2e3b0482"
 
 # ==================== PERSISTÊNCIA EM DISCO ====================
@@ -83,46 +62,47 @@ def load_entries_from_disk():
     ensure_storage()
     entries = []
     for name in sorted(os.listdir(META_DIR)):
-        if name.endswith(".json"):
-            try:
-                with open(os.path.join(META_DIR, name), "r", encoding="utf-8") as f:
-                    meta = json.load(f)
-                if meta.get("image_path") and os.path.exists(meta["image_path"]):
-                    entries.append(meta)
-            except Exception:
-                pass
+        if not name.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(META_DIR, name), "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            if meta.get("image_path") and os.path.exists(meta["image_path"]):
+                entries.append(meta)
+        except Exception:
+            pass
     entries.sort(key=lambda m: m.get("created_at", ""))
     return entries
 
 def clear_all_disk_data():
     for folder in (IMG_DIR, META_DIR):
         if os.path.isdir(folder):
-            for name in os.listdir(folder):
+            for n in os.listdir(folder):
                 try:
-                    os.remove(os.path.join(folder, name))
+                    os.remove(os.path.join(folder, n))
                 except Exception:
                     pass
 
-# ==================== BUSCA DE IMAGEM ====================
+# ==================== BUSCA IMAGEM (SerpAPI) ====================
 def search_google_images(query, api_key):
     try:
         url = "https://serpapi.com/search"
         params = {"engine": "google_images", "q": query, "api_key": api_key, "num": 5, "safe": "active"}
-        resp = requests.get(url, params=params, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
+        r = requests.get(url, params=params, timeout=15)
+        r.raise_for_status()
+        data = r.json()
         if "images_results" in data and data["images_results"]:
-            for r in data["images_results"][:5]:
-                image_url = r.get("original") or r.get("thumbnail")
-                if not image_url:
+            for res in data["images_results"][:5]:
+                img_url = res.get("original") or res.get("thumbnail")
+                if not img_url:
                     continue
                 try:
-                    ir = requests.get(image_url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
+                    ir = requests.get(img_url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
                     if ir.status_code == 200:
                         img = Image.open(BytesIO(ir.content))
                         img.verify()
                         img = Image.open(BytesIO(ir.content))
-                        return img, r.get("source", "Google Images")
+                        return img, res.get("source", "Google Images")
                 except Exception:
                     continue
         return None, None
@@ -139,24 +119,23 @@ def create_placeholder_image(text, width=1200, height=675):
         b = int(234 + (75 - 234) * (y / height))
         d.rectangle([(0, y), (width, y + 1)], fill=(r, g, b))
     try:
-        font_large = ImageFont.truetype("arial.ttf", 70)
-        font_small = ImageFont.truetype("arial.ttf", 40)
+        font_l = ImageFont.truetype("arial.ttf", 70)
+        font_s = ImageFont.truetype("arial.ttf", 40)
     except:
         try:
-            font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 70)
-            font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 40)
+            font_l = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 70)
+            font_s = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 40)
         except:
-            font_large = ImageFont.load_default(); font_small = ImageFont.load_default()
-    bbox = d.textbbox((0, 0), text, font=font_large)
+            font_l = ImageFont.load_default(); font_s = ImageFont.load_default()
+    bbox = d.textbbox((0,0), text, font=font_l)
     tw, th = bbox[2]-bbox[0], bbox[3]-bbox[1]
     x, y = (width - tw)//2, (height - th)//2 - 30
-    d.text((x+4, y+4), text, font=font_large, fill=(0,0,0,180))
-    d.text((x, y), text, font=font_large, fill=(255,255,255))
-    subtitle = "Imagem não encontrada"
-    bbox2 = d.textbbox((0,0), subtitle, font=font_small)
-    sub_x = (width - (bbox2[2]-bbox2[0]))//2
-    d.text((sub_x+2, y+th+22), subtitle, font=font_small, fill=(0,0,0,180))
-    d.text((sub_x, y+th+20), subtitle, font=font_small, fill=(255,255,255,200))
+    d.text((x+4, y+4), text, font=font_l, fill=(0,0,0,180))
+    d.text((x, y), text, font=font_l, fill=(255,255,255))
+    sub = "Imagem não encontrada"
+    b2 = d.textbbox((0,0), sub, font=font_s)
+    d.text(((width-(b2[2]-b2[0]))//2 + 2, y+th+22), sub, font=font_s, fill=(0,0,0,180))
+    d.text(((width-(b2[2]-b2[0]))//2, y+th+20), sub, font=font_s, fill=(255,255,255,200))
     return img
 
 def fetch_character_image(name, api_key):
@@ -165,7 +144,7 @@ def fetch_character_image(name, api_key):
         return create_placeholder_image(name), "Placeholder"
     with st.spinner(f"🔍 Buscando '{name}' no Google Images..."):
         img, src = search_google_images(name, api_key)
-        if img: 
+        if img:
             st.success(f"✅ Imagem encontrada! (Fonte: {src})")
             return img, src
     with st.spinner("🔍 Tentando busca alternativa..."):
@@ -176,22 +155,25 @@ def fetch_character_image(name, api_key):
     st.warning(f"⚠️ Não encontramos '{name}'. Usando placeholder.")
     return create_placeholder_image(name), "Placeholder"
 
-# ==================== CRIA MEME ====================
+# ==================== MEME ====================
 def create_meme(image, text="HEAR ME OUT", character_name="", canvas_size=(1200, 675)):
     canvas = Image.new("RGB", canvas_size, color=(26, 26, 26))
     cw, ch = canvas_size
-    tw = 150  # área do título
-    aw = ch - tw
+    text_space = 150
+    avail_h = ch - text_space
     iw, ih = image.size
-    scale = min(cw/iw, aw/ih)
+    scale = min(cw/iw, avail_h/ih)
     ns = (int(iw*scale), int(ih*scale))
     try: image = image.resize(ns, Image.Resampling.LANCZOS)
     except: image = image.resize(ns, Image.LANCZOS)
     if image.mode == 'RGBA':
-        bg = Image.new('RGB', image.size, (26,26,26)); bg.paste(image, mask=image.split()[3]); image = bg
+        bg = Image.new('RGB', image.size, (26,26,26))
+        bg.paste(image, mask=image.split()[3])
+        image = bg
     elif image.mode != 'RGB':
         image = image.convert('RGB')
-    x = (cw - ns[0])//2; y = tw + (aw - ns[1])//2
+    x = (cw - ns[0])//2
+    y = text_space + (avail_h - ns[1])//2
     canvas.paste(image, (x, y))
     d = ImageDraw.Draw(canvas)
     try:
@@ -203,12 +185,14 @@ def create_meme(image, text="HEAR ME OUT", character_name="", canvas_size=(1200,
             char_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 50)
         except:
             main_font = ImageFont.load_default(); char_font = ImageFont.load_default()
+    # Título
     bbox = d.textbbox((0,0), text, font=main_font)
     tx = (cw - (bbox[2]-bbox[0]))//2; ty = 20
     for ox in range(-5,6):
         for oy in range(-5,6):
             if ox or oy: d.text((tx+ox, ty+oy), text, font=main_font, fill=(0,0,0))
     d.text((tx, ty), text, font=main_font, fill=(255,255,255))
+    # Personagem
     if character_name:
         cb = d.textbbox((0,0), character_name, font=char_font)
         cx = (cw - (cb[2]-cb[0]))//2; cy = 110
@@ -218,26 +202,6 @@ def create_meme(image, text="HEAR ME OUT", character_name="", canvas_size=(1200,
         d.text((cx, cy), character_name, font=char_font, fill=(255,75,75))
     return canvas
 
-# ==================== TRANSIÇÃO (FADE) ====================
-def make_same_size(a: Image.Image, b: Image.Image):
-    w, h = max(a.width, b.width), max(a.height, b.height)
-    def pad(img):
-        bg = Image.new("RGB", (w, h), (26,26,26))
-        bg.paste(img, ((w-img.width)//2, (h-img.height)//2))
-        return bg
-    return pad(a), pad(b)
-
-def transition_fade(placeholder, img_from: Image.Image, img_to: Image.Image, duration=0.7, steps=10):
-    if img_from is None:
-        placeholder.image(img_to, use_container_width=True); return
-    a, b = make_same_size(img_from, img_to)
-    per = max(duration/steps, 0.02)
-    for i in range(steps+1):
-        alpha = i/float(steps)
-        frame = Image.blend(a, b, alpha)
-        placeholder.image(frame, use_container_width=True)
-        time.sleep(per)
-
 # ==================== SESSION STATE ====================
 ensure_storage()
 if "memes_collection" not in st.session_state:
@@ -246,8 +210,6 @@ if "current_slide" not in st.session_state:
     st.session_state.current_slide = 0
 if "presenter_unlocked" not in st.session_state:
     st.session_state.presenter_unlocked = False
-if "autoplay" not in st.session_state:
-    st.session_state.autoplay = False
 
 # ==================== SIDEBAR ====================
 with st.sidebar:
@@ -256,7 +218,6 @@ with st.sidebar:
     st.divider()
     st.metric("Total de Personagens", len(st.session_state.memes_collection))
 
-    # SENHA DO HOST
     if mode == "🎬 Apresentação (Host)":
         pwd = st.text_input("🔒 Senha do Host", type="password", placeholder="2810")
         if st.button("🔑 Entrar como Host", use_container_width=True):
@@ -340,118 +301,92 @@ else:
         st.info("👈 Volte para o modo **Coleta** e adicione alguns personagens primeiro!")
         st.stop()
 
-    # ---- atalhos de teclado (setas + espaço) via query params ----
-    components.html("""
-    <script>
-    document.addEventListener('keydown', function(e){
-        // evita scroll da página com espaço
-        if (e.code === 'Space') { e.preventDefault(); }
-        const url = new URL(window.location.href);
-        if (e.key === 'ArrowRight') { url.searchParams.set('nav','next'); window.location.href = url.toString(); }
-        else if (e.key === 'ArrowLeft') { url.searchParams.set('nav','prev'); window.location.href = url.toString(); }
-        else if (e.code === 'Space') { url.searchParams.set('toggle','autoplay'); window.location.href = url.toString(); }
-    });
-    </script>
-    """, height=0)
+    current = st.session_state.memes_collection[st.session_state.current_slide]
 
-    # processa query params de navegação
-    qp = _get_qparams()
-    if qp.get("toggle") == "autoplay":
-        st.session_state.autoplay = not st.session_state.autoplay
-        _clear_qparams()
-        do_rerun()
-    if qp.get("nav") == "next":
-        st.session_state.current_slide = (st.session_state.current_slide + 1) % len(st.session_state.memes_collection)
-        _clear_qparams()
-        do_rerun()
-    if qp.get("nav") == "prev":
-        st.session_state.current_slide = (st.session_state.current_slide - 1) % len(st.session_state.memes_collection)
-        _clear_qparams()
-        do_rerun()
-
-    # ---- controles ----
-    c1, c2, c3, c4, c5 = st.columns([1.3, 1.3, 1.2, 1.6, 1.6])
-    with c1:
-        trans = st.selectbox("Transição", ["Sem transição", "Fade"], index=1)
-    with c2:
-        sec = st.slider("Duração por slide (s)", 1.0, 10.0, 3.0, 0.5)
-    with c3:
-        if not st.session_state.autoplay:
-            if st.button("▶️ Iniciar", use_container_width=True):
-                st.session_state.autoplay = True
+    # --------- Botões de navegação (ACIMA, colados na imagem) ---------
+    nav_top = st.container()
+    with nav_top:
+        c1, c2, c3, c4, c5 = st.columns([1, 1, 2, 1, 1])
+        with c1:
+            if st.button("⏮️ Primeiro", use_container_width=True, key="first_top"):
+                st.session_state.current_slide = 0
                 do_rerun()
-        else:
-            if st.button("⏹️ Parar", use_container_width=True):
-                st.session_state.autoplay = False
+        with c2:
+            if st.button("◀️ Anterior", use_container_width=True, key="prev_top"):
+                if st.session_state.current_slide > 0:
+                    st.session_state.current_slide -= 1
+                else:
+                    st.session_state.current_slide = 0
                 do_rerun()
-    with c4:
-        if st.button("⛶ Tela cheia", use_container_width=True):
-            components.html("""
-            <script>
-            const d = window.parent.document;
-            const el = d.documentElement;
-            if (el.requestFullscreen) el.requestFullscreen();
-            else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
-            else if (el.mozRequestFullScreen) el.mozRequestFullScreen();
-            else if (el.msRequestFullscreen) el.msRequestFullscreen();
-            </script>
-            """, height=0)
-    with c5:
-        if st.button("❎ Sair da tela cheia", use_container_width=True):
-            components.html("""
-            <script>
-            if (document.fullscreenElement) { document.exitFullscreen(); }
-            else if (document.webkitFullscreenElement) { document.webkitCancelFullScreen(); }
-            </script>
-            """, height=0)
+        with c3:
+            st.markdown(
+                f"<h3 style='text-align:center;margin:0.3rem 0;'>Slide {st.session_state.current_slide + 1} / {len(st.session_state.memes_collection)}</h3>",
+                unsafe_allow_html=True
+            )
+        with c4:
+            if st.button("Próximo ▶️", use_container_width=True, key="next_top"):
+                if st.session_state.current_slide < len(st.session_state.memes_collection) - 1:
+                    st.session_state.current_slide += 1
+                do_rerun()
+        with c5:
+            if st.button("⏭️ Último", use_container_width=True, key="last_top"):
+                st.session_state.current_slide = len(st.session_state.memes_collection) - 1
+                do_rerun()
 
-    st.divider()
-
-    # ---- slide atual ----
-    cur = st.session_state.memes_collection[st.session_state.current_slide]
+    # --------- Cabeçalho (nome/autor/hora) ---------
     st.markdown(
-        f"<h1 style='text-align:center;color:#FF4B4B;font-size:3.2em;margin:0;'>🎭 {cur['character']}</h1>",
-        unsafe_allow_html=True
-    )
-    who = cur.get("guest") or "Anônimo"
-    st.markdown(
-        f"<h3 style='text-align:center;color:#888;margin-top:0.2rem;'>Enviado por: <span style='color:#FF4B4B;'>{who}</span></h3>",
+        f"<h1 style='text-align:center;color:#FF4B4B;font-size:3.2em;margin:0.2rem 0;'>🎭 {current['character']}</h1>",
         unsafe_allow_html=True
     )
     st.markdown(
-        f"<p style='text-align:center;color:#999;margin-top:-0.3rem;'>⏰ {cur['timestamp']}</p>",
+        f"<h3 style='text-align:center;color:#888;margin-top:0;'>Enviado por: <span style='color:#FF4B4B;'>{current.get('guest','Anônimo')}</span></h3>",
+        unsafe_allow_html=True
+    )
+    st.markdown(
+        f"<p style='text-align:center;color:#999;margin-top:-0.3rem;'>⏰ {current['timestamp']}</p>",
         unsafe_allow_html=True
     )
 
-    show_area = st.empty()
-
-    # imagem atual e anterior para fade
+    # --------- IMAGEM ---------
     try:
-        img_current = Image.open(cur['image_path'])
+        img = Image.open(current['image_path'])
     except Exception:
-        img_current = create_placeholder_image(cur['character'])
-    prev_idx = (st.session_state.current_slide - 1) % len(st.session_state.memes_collection)
-    img_prev = None
-    if len(st.session_state.memes_collection) > 1:
-        try:
-            img_prev = Image.open(st.session_state.memes_collection[prev_idx]['image_path'])
-        except Exception:
-            img_prev = None
+        img = create_placeholder_image(current['character'])
+    st.image(img, use_container_width=True)
 
-    if trans == "Fade":
-        transition_fade(show_area, img_prev, img_current, duration=0.7, steps=10)
-    else:
-        show_area.image(img_current, use_container_width=True)
-
-    # autoplay
-    if st.session_state.autoplay:
-        time.sleep(sec)
-        st.session_state.current_slide = (st.session_state.current_slide + 1) % len(st.session_state.memes_collection)
-        do_rerun()
+    # --------- Botões de navegação (ABAIXO, ainda perto da imagem) ---------
+    nav_bottom = st.container()
+    with nav_bottom:
+        b1, b2, b3, b4, b5 = st.columns([1, 1, 2, 1, 1])
+        with b1:
+            if st.button("⏮️ Primeiro", use_container_width=True, key="first_bottom"):
+                st.session_state.current_slide = 0
+                do_rerun()
+        with b2:
+            if st.button("◀️ Anterior", use_container_width=True, key="prev_bottom"):
+                if st.session_state.current_slide > 0:
+                    st.session_state.current_slide -= 1
+                else:
+                    st.session_state.current_slide = 0
+                do_rerun()
+        with b3:
+            st.markdown(
+                f"<h3 style='text-align:center;margin:0.3rem 0;'>Slide {st.session_state.current_slide + 1} / {len(st.session_state.memes_collection)}</h3>",
+                unsafe_allow_html=True
+            )
+        with b4:
+            if st.button("Próximo ▶️", use_container_width=True, key="next_bottom"):
+                if st.session_state.current_slide < len(st.session_state.memes_collection) - 1:
+                    st.session_state.current_slide += 1
+                do_rerun()
+        with b5:
+            if st.button("⏭️ Último", use_container_width=True, key="last_bottom"):
+                st.session_state.current_slide = len(st.session_state.memes_collection) - 1
+                do_rerun()
 
     st.divider()
 
-    # ---- galeria ----
+    # --------- Galeria ---------
     st.subheader("📸 Galeria Completa")
     cols = st.columns(5)
     for idx, m in enumerate(st.session_state.memes_collection):
